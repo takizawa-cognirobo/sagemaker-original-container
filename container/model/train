@@ -14,7 +14,8 @@ import traceback
 
 import pandas as pd
 
-#from sklearn import tree
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score, precision_score, recall_score, roc_auc_score, f1_score
 from sklearn.linear_model import LogisticRegression
 
 # These are the paths to where SageMaker mounts interesting things in your container.
@@ -35,39 +36,20 @@ training_path = os.path.join(input_path, channel_name)
 def train():
     print('Starting the training.')
     try:
-        # Read in any hyperparameters that the user passed with the training job
-        with open(param_path, 'r') as tc:
-            trainingParams = json.load(tc)
-
-        # Take the set of files and read them all into a single pandas dataframe
-        input_files = [ os.path.join(training_path, file) for file in os.listdir(training_path) ]
-        if len(input_files) == 0:
-            raise ValueError(('There are no files in {}.\n' +
-                              'This usually indicates that the channel ({}) was incorrectly specified,\n' +
-                              'the data specification in S3 was incorrectly specified or the role specified\n' +
-                              'does not have permission to access the data.').format(training_path, channel_name))
-        raw_data = [ pd.read_csv(file, header=None) for file in input_files ]
-        train_data = pd.concat(raw_data)
-
-        # labels are in the first column
-        train_y = train_data.ix[:,0]
-        train_X = train_data.ix[:,1:]
-
-        # Here we only support a single hyperparameter. Note that hyperparameters are always passed in as
-        # strings, so we need to do any necessary conversions.
-        #max_leaf_nodes = trainingParams.get('max_leaf_nodes', None)
-        c = trainingParams.get('C', 1.0)
-        if c is not None:
-            c = int(c)
-
-        # Now use scikit-learn's decision tree classifier to train the model.
-        #clf = tree.DecisionTreeClassifier(max_leaf_nodes=max_leaf_nodes)
-        clf = LogisticRegression(C=1.0)
-        clf = clf.fit(train_X, train_y)
-
+        # get hyperparameters
+        training_params = get_training_params()
+        # get training data
+        X, y = get_training_data()
+        X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, random_state=0)
+        # traiing model
+        model = get_model(training_params)
+        model.fit(X_train, y_train)
+        # output model scores
+        log_model_score(model, X_train, y_train, 'train')
+        log_model_score(model, X_val, y_val, 'validation')
         # save the model
-        with open(os.path.join(model_path, 'model.pkl'), 'w') as out:
-            pickle.dump(clf, out)
+        save_model(model)
+
         print('Training complete.')
     except Exception as e:
         # Write out an error file. This will be returned as the failureReason in the
@@ -79,6 +61,59 @@ def train():
         print('Exception during training: ' + str(e) + '\n' + trc, file=sys.stderr)
         # A non-zero exit code causes the training job to be marked as Failed.
         sys.exit(255)
+
+def get_training_params():
+    # Read in any hyperparameters that the user passed with the training job
+    with open(param_path, 'r') as tc:
+        training_params = json.load(tc)
+    C = training_params.get('C', None)
+    if C is not None:
+        C = float(C)
+    penalty = training_params.get('penalty', None)
+
+    training_params['C'] = C
+    training_params['penalty'] = penalty
+    
+    return training_params
+
+def get_training_data():
+    # Take the set of files and read them all into a single pandas dataframe
+    input_files = [ os.path.join(training_path, file) for file in os.listdir(training_path) ]
+    if len(input_files) == 0:
+        raise ValueError(('There are no files in {}.\n' +
+                            'This usually indicates that the channel ({}) was incorrectly specified,\n' +
+                            'the data specification in S3 was incorrectly specified or the role specified\n' +
+                            'does not have permission to access the data.').format(training_path, channel_name))
+    raw_data = [ pd.read_csv(file, header=None) for file in input_files ]
+    train_data = pd.concat(raw_data)
+    # labels are in the first column
+    y = train_data.ix[:,0]
+    X = train_data.ix[:,1:]
+    return X, y
+
+def get_model(training_params):
+    model = LogisticRegression(**training_params)
+    return model
+
+def save_model(model):
+    with open(os.path.join(model_path, 'model.pkl'), 'w') as out:
+        pickle.dump(model, out)
+
+def log_model_score(model, X, y, score_type='train'):
+    prediction = model.predict(X)
+    predict_proba = model.predict_proba(X)
+
+    accuracy = accuracy_score(y, prediction)
+    precision = precision_score(y, prediction)
+    recall = recall_score(y, prediction)
+    auc = roc_auc_score(y, predict_proba[:, 1])
+    f1 = f1_score(y, prediction)
+
+    print(score_type + "_accuracy={:.2f};".format(accuracy))
+    print(score_type + "_precision={:.2f};".format(precision))
+    print(score_type + "_recall={:.2f};".format(recall))
+    print(score_type + "_auc={:.2f};".format(auc))
+    print(score_type + "_f1={:.2f};".format(f1))
 
 if __name__ == '__main__':
     train()
