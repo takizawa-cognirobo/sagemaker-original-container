@@ -6,13 +6,14 @@ from __future__ import print_function
 import os
 import json
 import pickle
-import StringIO
+from io import StringIO
 import sys
 import signal
 import traceback
 
 import flask
 
+import keras
 import pandas as pd
 
 prefix = '/opt/ml/'
@@ -28,8 +29,7 @@ class ScoringService(object):
     def get_model(cls):
         """Get the model object for this instance, loading it if it's not already loaded."""
         if cls.model == None:
-            with open(os.path.join(model_path, 'model.pkl'), 'r') as inp:
-                cls.model = pickle.load(inp)
+            cls.model = keras.models.load_model(os.path.join(model_path, 'model.h5'))
         return cls.model
 
     @classmethod
@@ -65,7 +65,7 @@ def transformation():
     # Convert from CSV to pandas
     if flask.request.content_type == 'text/csv':
         data = flask.request.data.decode('utf-8')
-        s = StringIO.StringIO(data)
+        s = StringIO(data)
         data = pd.read_csv(s, header=None)
     else:
         return flask.Response(response='This predictor only supports CSV data', status=415, mimetype='text/plain')
@@ -79,7 +79,7 @@ def transformation():
     predictions = ScoringService.predict(data)
 
     # Convert from numpy back to CSV
-    out = StringIO.StringIO()
+    out = StringIO()
     pd.DataFrame({'results':predictions}).to_csv(out, header=False, index=False)
     result = out.getvalue()
 

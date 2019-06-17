@@ -1,6 +1,5 @@
 #!/usr/bin/env python
 
-# A sample training component that trains a simple scikit-learn decision tree model.
 # This implementation works in File mode and makes no assumptions about the input file names.
 # Input is specified as CSV with a data point in each row and the labels in the first column.
 
@@ -16,7 +15,11 @@ import pandas as pd
 
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, precision_score, recall_score, roc_auc_score, f1_score
-from sklearn.linear_model import LogisticRegression
+from keras.models import Sequential,Model
+from keras.layers import Input, Dense, Conv1D, MaxPooling1D, Dropout, Flatten, concatenate, BatchNormalization, Lambda
+import keras.backend as K
+from keras.callbacks import EarlyStopping, ModelCheckpoint, ReduceLROnPlateau
+import tensorflow as tf
 
 # These are the paths to where SageMaker mounts interesting things in your container.
 
@@ -40,15 +43,8 @@ def train():
         training_params = get_training_params()
         # get training data
         X, y = get_training_data()
-        X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, random_state=0)
         # traiing model
-        model = get_model(training_params)
-        model.fit(X_train, y_train)
-        # output model scores
-        log_model_score(model, X_train, y_train, 'train')
-        log_model_score(model, X_val, y_val, 'validation')
-        # save the model
-        save_model(model)
+        fit(X, y, training_params)
 
         print('Training complete.')
     except Exception as e:
@@ -66,13 +62,14 @@ def get_training_params():
     # Read in any hyperparameters that the user passed with the training job
     with open(param_path, 'r') as tc:
         training_params = json.load(tc)
-    C = training_params.get('C', None)
-    if C is not None:
-        C = float(C)
-    penalty = training_params.get('penalty', None)
+    EPOCHS = training_params.get('EPOCHS', 100)
+    EPOCHS = int(EPOCHS)
 
-    training_params['C'] = C
-    training_params['penalty'] = penalty
+    BATCH_SIZE = training_params.get('BATCH_SIZE', 64)
+    BATCH_SIZE = int(BATCH_SIZE)
+
+    training_params['EPOCHS'] = EPOCHS
+    training_params['BATCH_SIZE'] = BATCH_SIZE
     
     return training_params
 
@@ -91,29 +88,57 @@ def get_training_data():
     X = train_data.ix[:,1:]
     return X, y
 
-def get_model(training_params):
-    model = LogisticRegression(**training_params)
-    return model
+def fit(X, y, training_params):
+    model = get_model(X.shape)
 
-def save_model(model):
-    with open(os.path.join(model_path, 'model.pkl'), 'w') as out:
-        pickle.dump(model, out)
+    X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, random_state=0)
+    X_train = X_train.values.reshape(-1, X_train.shape[1], 1)
+    X_val = X_val.values.reshape(-1, X_val.shape[1], 1)
 
-def log_model_score(model, X, y, score_type='train'):
-    prediction = model.predict(X)
-    predict_proba = model.predict_proba(X)
+    model.compile(
+        optimizer='adam',
+        loss='binary_crossentropy',
+        metrics=['acc',roc_auc]
+    )
+    
+    model_check_point = ModelCheckpoint('best.hdf5', save_best_only=True)
+    early_stopping = EarlyStopping(patience=10)
+    reduce_lr = ReduceLROnPlateau(patience=3)
+    callbacks = [model_check_point,early_stopping,reduce_lr]
 
-    accuracy = accuracy_score(y, prediction)
-    precision = precision_score(y, prediction)
-    recall = recall_score(y, prediction)
-    auc = roc_auc_score(y, predict_proba[:, 1])
-    f1 = f1_score(y, prediction)
+    history = model.fit(
+        X_train, y_train,
+        batch_size=training_params['BATCH_SIZE'],
+        epochs=training_params['EPOCHS'],
+        validation_data=(X_val, y_val),
+        callbacks=callbacks)
 
-    print(score_type + "_accuracy={:.2f};".format(accuracy))
-    print(score_type + "_precision={:.2f};".format(precision))
-    print(score_type + "_recall={:.2f};".format(recall))
-    print(score_type + "_auc={:.2f};".format(auc))
-    print(score_type + "_f1={:.2f};".format(f1))
+    model.load_weights('best.hdf5')
+    model.save(os.path.join(model_path, 'model.h5'))
+
+def roc_auc(y_true, y_pred):
+    roc_auc = tf.py_func(roc_auc_score, (y_true, y_pred), tf.double)
+    return roc_auc
+
+def get_model(input_shpae):
+    inp = Input(batch_shape=(None, input_shpae[1], 1))
+    x = Conv1D(128, 4, padding='same')(inp)
+    x = BatchNormalization()(x)
+    pool1 = MaxPooling1D(2, padding='same')(x)
+    x = Conv1D(64, 4, padding='same')(pool1)
+    x = BatchNormalization()(x)
+    pool2 = MaxPooling1D(2, padding='same')(x)
+    x = Conv1D(32, 4, padding='same')(pool2)
+    x = Dense(256)(x)
+    x = Dropout(0.3)(x)
+    x = Dense(128)(x)
+    x = Dropout(0.3)(x)
+    x = Dense(64)(x)
+    x = Dropout(0.3)(x)
+    x = Dense(32)(x)
+    x = Flatten()(x)
+    x = Dense(1, activation='sigmoid')(x)
+    return Model(inputs=inp, outputs=x)
 
 if __name__ == '__main__':
     train()

@@ -1,5 +1,8 @@
-.pkl
-.csv
+*.pkl
+*.hdf5
+*.h5
+*.csv
+
 */test_dir/
 
 # Byte-compiled / optimized / DLL files
