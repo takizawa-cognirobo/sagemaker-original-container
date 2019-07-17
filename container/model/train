@@ -12,6 +12,7 @@ import pickle
 import sys
 import traceback
 
+import numpy as np
 import pandas as pd
 
 from sklearn.model_selection import train_test_split
@@ -43,13 +44,37 @@ def train():
         print(training_params)
         # get data
         X_train, y_train = get_data(train_path, channel_train)
-        X_test, y_test = get_data(test_path, channel_test)
+        X_eval, y_eval = get_data(test_path, channel_test)
         # traiing model
-        model = get_model(training_params)
-        model.fit(X_train, y_train)
+        lgb_train = lightgbm.Dataset(X_train, y_train, free_raw_data=False)
+        lgb_eval = lightgbm.Dataset(X_eval, y_eval, free_raw_data=False)
+        num_boost_round = training_params['num_boost_round']
+        early_stopping_rounds = training_params['early_stopping_rounds']    
+        if training_params['user_model_path'] is None:
+            model = lightgbm.train(
+                            training_params,
+                            lgb_train,
+                            valid_sets=[lgb_eval, lgb_train],
+                            valid_names=['eval', 'train'],
+                            num_boost_round=num_boost_round,
+                            early_stopping_rounds=early_stopping_rounds,
+                            verbose_eval=True
+                            )
+        else:
+            model = lightgbm.train(
+                            training_params,
+                            lgb_train,
+                            init_model=training_params['user_model_path'],
+                            valid_sets=[lgb_eval, lgb_train],
+                            valid_names=['eval', 'train'],
+                            num_boost_round=num_boost_round,
+                            early_stopping_rounds=early_stopping_rounds,
+                            verbose_eval=True
+                            )
+
         # output model scores
         log_model_score(model, X_train, y_train, 'train')
-        log_model_score(model, X_test, y_test, 'validation')
+        log_model_score(model, X_eval, y_eval, 'eval')
         # save the model
         save_model(model)
 
@@ -87,6 +112,9 @@ def get_training_params():
     reg_alpha = float(training_params.get('reg_alpha', 0.0))
     reg_lambda = float(training_params.get('reg_lambda', 0.0))
     subsample = float(training_params.get('subsample', 1.0))
+    user_model_path = training_params.get('user_model_path', None)
+    num_boost_round = int(training_params.get('num_boost_round', 100))
+    early_stopping_rounds = int(training_params.get('early_stopping_rounds', 10))
 
     training_params['boosting_type'] = boosting_type
     training_params['class_weight'] = class_weight
@@ -103,6 +131,11 @@ def get_training_params():
     training_params['reg_alpha'] = reg_alpha
     training_params['reg_lambda'] = reg_lambda
     training_params['subsample'] = subsample
+    training_params['user_model_path'] = user_model_path
+    training_params['num_boost_round'] = num_boost_round
+    training_params['early_stopping_rounds'] = early_stopping_rounds
+    training_params['objective'] = 'binary'
+    training_params['metric'] = 'auc'
 
     return training_params
 
@@ -121,22 +154,17 @@ def get_data(path, channel_name):
     X = data.ix[:,1:]
     return X, y
 
-def get_model(training_params):
-    model = lightgbm.LGBMClassifier(**training_params)
-    return model
-
 def save_model(model):
-    with open(os.path.join(model_path, 'model.pkl'), 'w') as out:
-        pickle.dump(model, out)
+    model.save_model(os.path.join(model_path,'model.txt'))
 
 def log_model_score(model, X, y, score_type='train'):
-    prediction = model.predict(X)
-    predict_proba = model.predict_proba(X)
+    predict_proba = model.predict(X)
+    prediction = np.round(predict_proba)
 
     accuracy = accuracy_score(y, prediction)
     precision = precision_score(y, prediction)
     recall = recall_score(y, prediction)
-    auc = roc_auc_score(y, predict_proba[:, 1])
+    auc = roc_auc_score(y, predict_proba)
     f1 = f1_score(y, prediction)
 
     print(score_type + "_accuracy={:.4f};".format(accuracy))

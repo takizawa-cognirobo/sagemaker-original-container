@@ -1,6 +1,6 @@
-.pkl
-.csv
-*/test_dir/
+*.pkl
+*.csv
+*/test_dir/*
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

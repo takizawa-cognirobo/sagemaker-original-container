@@ -13,7 +13,10 @@ import traceback
 
 import flask
 
+import numpy as np
 import pandas as pd
+
+import lightgbm
 
 prefix = '/opt/ml/'
 model_path = os.path.join(prefix, 'model')
@@ -28,8 +31,7 @@ class ScoringService(object):
     def get_model(cls):
         """Get the model object for this instance, loading it if it's not already loaded."""
         if cls.model == None:
-            with open(os.path.join(model_path, 'model.pkl'), 'r') as inp:
-                cls.model = pickle.load(inp)
+            cls.model = lightgbm.Booster(model_file=os.path.join(model_path, 'model.txt'))
         return cls.model
 
     @classmethod
@@ -40,12 +42,9 @@ class ScoringService(object):
             input (a pandas dataframe): The data on which to do the predictions. There will be
                 one prediction per row in the dataframe"""
         clf = cls.get_model()
-        return clf.predict(input)
-
-    @classmethod
-    def predict_proba(cls, input):
-        clf = cls.get_model()
-        return clf.predict_proba(input)[:,1]
+        predict_proba = clf.predict(input)
+        prediction = np.round(predict_proba).astype(int)
+        return prediction, predict_proba
 
 # The flask app for serving predictions
 app = flask.Flask(__name__)
@@ -81,12 +80,11 @@ def transformation():
     #data.drop(data.columns[[0]],axis=1,inplace=True)
 
     # Do the prediction
-    predictions = ScoringService.predict(data)
-    probability = ScoringService.predict_proba(data)
-
+    predictions, probability = ScoringService.predict(data)
+    
     # Convert from numpy back to CSV
     out = StringIO.StringIO()
-    pd.DataFrame({'results': predictions, 'probability': probability}).to_csv(out, header=False, index=False)
+    pd.DataFrame({'results': predictions, 'probability': probability}, columns=['results', 'probability']).to_csv(out, header=False, index=False)
     result = out.getvalue()
 
     return flask.Response(response=result, status=200, mimetype='text/csv')
