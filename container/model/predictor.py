@@ -42,6 +42,11 @@ class ScoringService(object):
         clf = cls.get_model()
         return clf.predict(input)
 
+    @classmethod
+    def predict_proba(cls, input):
+        clf = cls.get_model()
+        return clf.predict_proba(input)[:,1]
+
 # The flask app for serving predictions
 app = flask.Flask(__name__)
 
@@ -77,10 +82,11 @@ def transformation():
 
     # Do the prediction
     predictions = ScoringService.predict(data)
+    probability = ScoringService.predict_proba(data)
 
     # Convert from numpy back to CSV
     out = StringIO.StringIO()
-    pd.DataFrame({'results':predictions}).to_csv(out, header=False, index=False)
+    pd.DataFrame({'results': predictions, 'probability': probability}).to_csv(out, header=False, index=False)
     result = out.getvalue()
 
     return flask.Response(response=result, status=200, mimetype='text/csv')

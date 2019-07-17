@@ -16,7 +16,7 @@ import pandas as pd
 
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, precision_score, recall_score, roc_auc_score, f1_score
-from sklearn.linear_model import LogisticRegression
+import lightgbm
 
 # These are the paths to where SageMaker mounts interesting things in your container.
 
@@ -29,8 +29,10 @@ param_path = os.path.join(prefix, 'input/config/hyperparameters.json')
 
 # This algorithm has a single channel of input data called 'training'. Since we run in
 # File mode, the input files are copied to the directory specified here.
-channel_name='training'
-training_path = os.path.join(input_path, channel_name)
+channel_train = 'train'
+channel_test = 'test'
+train_path = os.path.join(input_path, channel_train)
+test_path = os.path.join(input_path, channel_test)
 
 # The function to execute the training.
 def train():
@@ -38,15 +40,16 @@ def train():
     try:
         # get hyperparameters
         training_params = get_training_params()
-        # get training data
-        X, y = get_training_data()
-        X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, random_state=0)
+        print(training_params)
+        # get data
+        X_train, y_train = get_data(train_path, channel_train)
+        X_test, y_test = get_data(test_path, channel_test)
         # traiing model
         model = get_model(training_params)
         model.fit(X_train, y_train)
         # output model scores
         log_model_score(model, X_train, y_train, 'train')
-        log_model_score(model, X_val, y_val, 'validation')
+        log_model_score(model, X_test, y_test, 'validation')
         # save the model
         save_model(model)
 
@@ -66,33 +69,60 @@ def get_training_params():
     # Read in any hyperparameters that the user passed with the training job
     with open(param_path, 'r') as tc:
         training_params = json.load(tc)
-    C = training_params.get('C', None)
-    if C is not None:
-        C = float(C)
-    penalty = training_params.get('penalty', None)
 
-    training_params['C'] = C
-    training_params['penalty'] = penalty
-    
+    boosting_type = training_params.get('boosting_type', 'gbdt')
+    class_weight =  training_params.get('class_weight', None)
+    colsample_bytree = float(training_params.get('colsample_bytree', 1.0))
+    learning_rate = float(training_params.get('learning_rate', 0.1))
+    max_depth = int(training_params.get('max_depth', -1))
+    min_child_samples = int(training_params.get('min_child_samples', 20))
+    min_child_weight = float(training_params.get('min_child_weight', 0.001))
+    min_split_gain = float(training_params.get('min_split_gain', 0.0))
+    n_estimators = int(training_params.get('n_estimators', 100))
+    num_leaves = int(training_params.get('num_leaves', 31))
+    objective =  training_params.get('objective', None)
+    random_state = training_params.get('random_state', None)
+    if random_state is not None:
+        random_state = int(random_state)
+    reg_alpha = float(training_params.get('reg_alpha', 0.0))
+    reg_lambda = float(training_params.get('reg_lambda', 0.0))
+    subsample = float(training_params.get('subsample', 1.0))
+
+    training_params['boosting_type'] = boosting_type
+    training_params['class_weight'] = class_weight
+    training_params['colsample_bytree'] = colsample_bytree
+    training_params['learning_rate'] = learning_rate
+    training_params['max_depth'] = max_depth
+    training_params['min_child_samples'] = min_child_samples
+    training_params['min_child_weight'] = min_child_weight
+    training_params['min_split_gain'] = min_split_gain
+    training_params['n_estimators'] = n_estimators
+    training_params['num_leaves'] = num_leaves
+    training_params['objective'] = objective
+    training_params['random_state'] = random_state
+    training_params['reg_alpha'] = reg_alpha
+    training_params['reg_lambda'] = reg_lambda
+    training_params['subsample'] = subsample
+
     return training_params
 
-def get_training_data():
+def get_data(path, channel_name):
     # Take the set of files and read them all into a single pandas dataframe
-    input_files = [ os.path.join(training_path, file) for file in os.listdir(training_path) ]
+    input_files = [ os.path.join(path, file) for file in os.listdir(path) ]
     if len(input_files) == 0:
         raise ValueError(('There are no files in {}.\n' +
                             'This usually indicates that the channel ({}) was incorrectly specified,\n' +
                             'the data specification in S3 was incorrectly specified or the role specified\n' +
-                            'does not have permission to access the data.').format(training_path, channel_name))
+                            'does not have permission to access the data.').format(path, channel_name))
     raw_data = [ pd.read_csv(file, header=None) for file in input_files ]
-    train_data = pd.concat(raw_data)
+    data = pd.concat(raw_data)
     # labels are in the first column
-    y = train_data.ix[:,0]
-    X = train_data.ix[:,1:]
+    y = data.ix[:,0]
+    X = data.ix[:,1:]
     return X, y
 
 def get_model(training_params):
-    model = LogisticRegression(**training_params)
+    model = lightgbm.LGBMClassifier(**training_params)
     return model
 
 def save_model(model):
@@ -109,11 +139,11 @@ def log_model_score(model, X, y, score_type='train'):
     auc = roc_auc_score(y, predict_proba[:, 1])
     f1 = f1_score(y, prediction)
 
-    print(score_type + "_accuracy={:.2f};".format(accuracy))
-    print(score_type + "_precision={:.2f};".format(precision))
-    print(score_type + "_recall={:.2f};".format(recall))
-    print(score_type + "_auc={:.2f};".format(auc))
-    print(score_type + "_f1={:.2f};".format(f1))
+    print(score_type + "_accuracy={:.4f};".format(accuracy))
+    print(score_type + "_precision={:.4f};".format(precision))
+    print(score_type + "_recall={:.4f};".format(recall))
+    print(score_type + "_auc={:.4f};".format(auc))
+    print(score_type + "_f1={:.4f};".format(f1))
 
 if __name__ == '__main__':
     train()
