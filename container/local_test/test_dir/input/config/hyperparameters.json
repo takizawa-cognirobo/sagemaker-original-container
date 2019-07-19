@@ -1,2 +1,3 @@
-{"C": 10,
-"penalty": "l2"}
+{
+    "n_estimators": "300"
+}
